@@ -1,65 +1,180 @@
 import React from 'react';
-import { 
-  IonContent, 
-  IonHeader, 
-  IonPage, 
-  IonTitle, 
-  IonToolbar, 
+import {
+  IonContent,
+  IonHeader,
+  IonPage,
+  IonTitle,
+  IonToolbar,
   IonList,
-  useIonViewWillEnter
+  useIonViewWillEnter,
+  IonText,
+  IonAlert,
+  IonToast
 } from '@ionic/react';
 import './Tab1.css';
 import { Repository } from '../interfaces/Repository';
-import RepoItem from '../components/RepoItem'; 
-import { fetchRepositories } from '../services/GitHubService';
-
-import LoadingSpinner from '../components/LoadingSpinner'; 
-
-
+import { RepositoryPayload } from '../interfaces/RepositoryPayload';
+import RepoItem from '../components/RepoItem';
+import EditRepoModal from '../components/EditRepoModal';
+import { fetchRepositories, updateRepository, deleteRepository } from '../services/GitHubService';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 const Tab1: React.FC = () => {
   const [repositoryList, setRepositoryList] = React.useState<Repository[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [errorMsg, setErrorMsg] = React.useState("");
+
+  // Estado para edición (PATCH)
+  const [repoToEdit, setRepoToEdit] = React.useState<Repository | null>(null);
+  const [showEditModal, setShowEditModal] = React.useState(false);
+
+  // Estado para eliminación (DELETE)
+  const [repoToDelete, setRepoToDelete] = React.useState<Repository | null>(null);
+  const [showDeleteAlert, setShowDeleteAlert] = React.useState(false);
+
+  // Feedback visual
+  const [toastMsg, setToastMsg] = React.useState("");
+  const [toastColor, setToastColor] = React.useState<'success' | 'danger'>('success');
+  const [showToast, setShowToast] = React.useState(false);
+
+  const notify = (message: string, color: 'success' | 'danger') => {
+    setToastMsg(message);
+    setToastColor(color);
+    setShowToast(true);
+  };
 
   const loadRepos = async () => {
+    setLoading(true);
+    setErrorMsg("");
 
-    setLoading(true); 
-    try {
-      const reposData = await fetchRepositories();
-      setRepositoryList(reposData);
-    } catch (error) {
-      console.error("Error cargando repositorios:", error);
-    } finally {
-
-      setLoading(false); 
-    }
+    fetchRepositories()
+      .then((reposData) => setRepositoryList(reposData))
+      .catch((error) => {
+        console.error(error);
+        const apiError = error instanceof Error ? error.message : String(error);
+        setErrorMsg(`Error al cargar repositorios: ${apiError}`);
+      })
+      .finally(() => setLoading(false));
   };
 
   useIonViewWillEnter(() => {
     loadRepos();
   });
 
+  // --- Edición (PATCH) ---
+  const handleEditRequest = (repository: Repository) => {
+    setRepoToEdit(repository);
+    setShowEditModal(true);
+  };
+
+  const handleEditCancel = () => {
+    setShowEditModal(false);
+    setRepoToEdit(null);
+  };
+
+  const handleEditSave = async (changes: Partial<RepositoryPayload>) => {
+    if (!repoToEdit) return;
+    const updatedRepo = await updateRepository(repoToEdit.owner.login, repoToEdit.name, changes);
+    setRepositoryList((prevList) =>
+      prevList.map((repo) => (repo.id === repoToEdit.id ? { ...repo, ...updatedRepo } : repo))
+    );
+    setShowEditModal(false);
+    setRepoToEdit(null);
+    notify('Repositorio actualizado correctamente', 'success');
+  };
+
+  // --- Eliminación (DELETE) ---
+  const handleDeleteRequest = (repository: Repository) => {
+    setRepoToDelete(repository);
+    setShowDeleteAlert(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!repoToDelete) return;
+    const repo = repoToDelete;
+    setRepoToDelete(null);
+    deleteRepository(repo.owner.login, repo.name)
+      .then(() => {
+        setRepositoryList((prevList) => prevList.filter((r) => r.id !== repo.id));
+        notify(`Repositorio "${repo.name}" eliminado`, 'success');
+      })
+      .catch((error) => {
+        const apiError = error instanceof Error ? error.message : String(error);
+        notify(`Error al eliminar el repositorio: ${apiError}`, 'danger');
+      });
+  };
+
   return (
     <IonPage>
-      <IonHeader> 
+      <IonHeader>
         <IonToolbar>
           <IonTitle>Repositorios</IonTitle>
         </IonToolbar>
       </IonHeader>
-      
+
       <IonContent fullscreen>
         <IonHeader collapse="condense">
           <IonToolbar>
             <IonTitle size="large">Repositorios</IonTitle>
           </IonToolbar>
         </IonHeader>
+
         {loading && <LoadingSpinner />}
 
-        <IonList>
-          {repositoryList.map((repo) => (
-            <RepoItem key={repo.name} {...repo} /> 
-          ))} 
-        </IonList>
+        {!loading && repositoryList.length > 0 && (
+          <IonList>
+            {repositoryList.map((repo) => (
+              <RepoItem
+                key={repo.id}
+                {...repo}
+                onEdit={handleEditRequest}
+                onDelete={handleDeleteRequest}
+              />
+            ))}
+          </IonList>
+        )}
+
+        {!loading && errorMsg && (
+          <div style={{ padding: '20px', textAlign: 'center' }}>
+            <IonText color="danger">
+              <p style={{ fontWeight: 'bold' }}>{errorMsg}</p>
+            </IonText>
+          </div>
+        )}
+
+        <EditRepoModal
+          isOpen={showEditModal}
+          repository={repoToEdit}
+          onCancel={handleEditCancel}
+          onSave={handleEditSave}
+        />
+
+        <IonAlert
+          isOpen={showDeleteAlert}
+          header="Eliminar repositorio"
+          message={`¿Seguro que deseas eliminar "${repoToDelete?.name}"? Esta acción no se puede deshacer.`}
+          buttons={[
+            {
+              text: 'Cancelar',
+              role: 'cancel',
+              handler: () => setRepoToDelete(null)
+            },
+            {
+              text: 'Eliminar',
+              role: 'destructive',
+              handler: handleDeleteConfirm
+            }
+          ]}
+          onDidDismiss={() => setShowDeleteAlert(false)}
+        />
+
+        <IonToast
+          isOpen={showToast}
+          message={toastMsg}
+          duration={2500}
+          color={toastColor}
+          onDidDismiss={() => setShowToast(false)}
+        />
       </IonContent>
     </IonPage>
   );
